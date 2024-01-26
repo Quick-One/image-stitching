@@ -1,6 +1,8 @@
 from math import floor, ceil
 import numpy as np
 import cv2
+from skimage.feature import corner_harris, peak_local_max
+from scipy.spatial.distance import cdist
 
 
 def compute_homography(pt1, pt2):
@@ -145,3 +147,124 @@ def blend_image(im1, im2, method = 'mean'):
     
     else: raise NotImplementedError
     
+
+def merge_2images(im1, im2, H, method = 'mean'):
+    im1, im2 = warp_images([(im1, np.eye(3)), (im2, H)])
+    return blend_image(im1, im2, method)
+
+
+def harris_points(im, min_dist = 10, threshold_rel = 0.001, exclude_border = 30):
+    '''
+    returns the harris points in the image (yx format)
+    '''
+    im_gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
+    h = corner_harris(im_gray)
+    hpoints = peak_local_max(h, min_distance=min_dist, 
+                             threshold_rel=threshold_rel, 
+                             exclude_border=exclude_border)
+    return hpoints, h
+
+
+def ANMS(hpoints, h, n = 1000, c_robust = 0.9):
+    '''
+    Adaptive Non-Maximal Suppression on haris points
+    hpoints : numpy.ndarray of shape (n, 2) (yx format)
+    h : haris response of (image.shape)
+    returns : numpy.ndarray of shape (m, 2) (yx format)
+    '''
+    assert hpoints.shape[0] < 7500  # otherwise cdist will run out of memory
+    dist = cdist(hpoints, hpoints)
+    strength = h[hpoints[:,0], hpoints[:,1]]
+    
+    ver = np.tile(strength, (strength.shape[0], 1))
+    hor = ver.T
+    mask = (ver < c_robust*hor)
+    dist[mask] = 1e9
+    
+    minimum_distance = np.min(dist, axis=1)
+    indices_greatest = np.argsort(minimum_distance)[::-1][:n]
+    return hpoints[indices_greatest]
+
+
+def get_descriptors(im, pts, patch_size = 40):
+    '''
+    takes list of points (n x 2) (yx format)
+    returns descriptors of shape (n x 64*3)
+    '''
+    patches = []
+    off = patch_size // 2
+    for pt in pts:
+        y, x = pt
+        patch = im[y-off:y+off, x-off:x+off]
+        patch = (patch - np.mean(patch)) / np.std(patch)
+        patch = cv2.resize(patch, (8, 8))
+        patches.append(patch.flatten())
+    return np.vstack(patches)
+
+
+def match_descriptors(desc1, desc2, threshold = 0.5):
+    '''
+    desc1 : descriptors of shape (n1 x 64*3)
+    desc2 : descriptors of shape (n2 x 64*3)
+    returns : matches of shape (m x 2) (index of desc1, index of desc2)
+    '''
+    dist = cdist(desc1, desc2, metric='sqeuclidean')
+    smallest_ind = np.argmin(dist, axis=1)
+    smallest_val = np.min(dist, axis=1)
+    dist[:, smallest_ind] = 1e9
+    second_smallest_val = np.min(dist, axis=1)
+    
+    mask = (smallest_val / second_smallest_val) < threshold
+    matches = np.vstack((np.where(mask)[0], smallest_ind[mask]))
+    unique_ind = np.unique(matches[1], return_index=True)[1]
+    matches = matches[:, unique_ind]
+    return matches.T
+
+
+def homogenize(pts):
+    '''
+    takes points of shape (n x 2) (yx format)
+    returns points of shape (n x 3) (xy1 format)
+    '''
+    return np.hstack((yx_to_xy(pts), np.ones((pts.shape[0], 1))))
+
+
+def yx_to_xy(pts):
+    '''
+    takes points of shape (n x 2) (yx format)
+    returns points of shape (n x 2) (xy format)
+    '''
+    return np.flip(pts, axis=1)
+     
+
+def RANSAC2(pts1, pts2, n = 5000, threshold = 20):
+    '''
+    pts1 : numpy.ndarray of shape (n, 2) (yx format)
+    pts2 : numpy.ndarray of shape (n, 2) (yx format)
+    n : number of trialss
+    threshold : threshold for inliers
+    returns : best homography matrix, best number of inliers
+    '''
+    best = 0
+    bestH = None
+    pts1_xy1 = homogenize(pts1)
+    pts2_xy1 = homogenize(pts2)
+
+    for _ in range(n):
+        indices = np.random.choice(np.arange(len(pts1)), 4, replace=False)
+        p1 = yx_to_xy(pts1[indices])
+        p2 = yx_to_xy(pts2[indices])
+        H = compute_homography(p1, p2)
+        
+        transformed_all = H @ pts2_xy1.T
+        transformed_all /= transformed_all[2]
+        
+        # compute inliers
+        dist = np.linalg.norm(pts1_xy1.T - transformed_all, axis=0)
+        inliers = np.sum(dist < threshold)
+        
+        if inliers > best:
+            best = inliers
+            bestH = H
+
+    return bestH, best
