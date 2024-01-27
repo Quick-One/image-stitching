@@ -3,6 +3,7 @@ import numpy as np
 import cv2
 from skimage.feature import corner_harris, peak_local_max
 from scipy.spatial.distance import cdist
+import heapq
 
 
 def compute_homography(pt1, pt2):
@@ -268,3 +269,48 @@ def RANSAC2(pts1, pts2, n = 5000, threshold = 20):
             bestH = H
 
     return bestH, best
+
+
+def MST(weight):
+    '''
+    given a weight matrix, return the maxiumum spanning tree
+    weight[i, j] = the weight if i < j
+    if W[i, j] = 0, because i > j
+    '''
+    N = weight.shape[0]
+    graph = [[] for _ in range(N)]
+    
+    for i in range(N):
+        for j in range(i+1, N):
+            graph[i].append((-weight[i, j], j, i))
+            graph[j].append((-weight[i, j], i, j))
+    
+    visited = [False] * N
+    visited[0] = True
+    
+    queue = graph[0].copy()
+    heapq.heapify(queue)
+    mst = []
+    while queue:
+        w, v, x = heapq.heappop(queue)
+        if visited[v]: continue
+        visited[v] = True
+        mst.append((v, x))
+        for w, u, _ in graph[v]:
+            if not visited[u]:
+                heapq.heappush(queue, (w, u, v))
+
+    return mst
+
+
+def adjacency_list_from_edges(edges, N):
+    '''
+    edges : list of tuples (weight, vertex)
+    N : number of vertices
+    returns : adjacency list
+    '''
+    graph = [[] for _ in range(N)]
+    for x, y in edges:
+        graph[x].append(y)
+        graph[y].append(x)
+    return graph
