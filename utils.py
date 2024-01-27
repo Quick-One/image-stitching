@@ -238,7 +238,7 @@ def yx_to_xy(pts):
     return np.flip(pts, axis=1)
      
 
-def RANSAC2(pts1, pts2, n = 5000, threshold = 20):
+def RANSAC(pts1, pts2, n = 5000, threshold = 20):
     '''
     pts1 : numpy.ndarray of shape (n, 2) (yx format)
     pts2 : numpy.ndarray of shape (n, 2) (yx format)
